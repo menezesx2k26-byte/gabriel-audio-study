@@ -13,13 +13,35 @@ services:
         value: production
       - key: PORT
         value: 3001
-      - key: TTS_MODEL
-        value: gpt-4o-mini-tts
-      - key: TTS_VOICE
-        value: marin
-      - key: OPENAI_API_KEY
-        sync: false
       - key: APP_SECRET
         sync: false
       - key: CORS_ORIGIN
         value: https://troque-pelo-seu-dominio-ou-url-do-render
+      - key: TTS_PROVIDER_ORDER
+        value: google,elevenlabs,openai
+      - key: GOOGLE_TTS_CREDENTIALS_B64
+        sync: false
+      - key: GOOGLE_TTS_VOICES
+        value: pt-BR-Wavenet-A,pt-BR-Wavenet-B
+      - key: GOOGLE_TTS_LANGUAGE_CODE
+        value: pt-BR
+      - key: GOOGLE_TTS_AUDIO_ENCODING
+        value: MP3
+      - key: GOOGLE_TTS_SPEAKING_RATE
+        value: 1
+      - key: GOOGLE_TTS_PITCH
+        value: 0
+      - key: ELEVENLABS_API_KEYS
+        sync: false
+      - key: ELEVENLABS_VOICE_IDS
+        sync: false
+      - key: ELEVENLABS_MODEL_ID
+        value: eleven_multilingual_v2
+      - key: ELEVENLABS_OUTPUT_FORMAT
+        value: mp3_44100_128
+      - key: OPENAI_API_KEYS
+        sync: false
+      - key: TTS_MODEL
+        value: gpt-4o-mini-tts
+      - key: TTS_VOICE
+        value: marin

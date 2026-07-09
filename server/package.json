@@ -9,6 +9,7 @@
     "start": "node src/index.js"
   },
   "dependencies": {
+    "@aws-sdk/client-polly": "^3.730.0",
     "@google-cloud/text-to-speech": "^6.2.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

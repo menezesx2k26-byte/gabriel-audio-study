@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import textToSpeech from "@google-cloud/text-to-speech";
 import cors from "cors";
 import dotenv from "dotenv";
 import express from "express";
@@ -36,7 +37,19 @@ function parseList(value) {
     .filter(Boolean);
 }
 
-const TTS_PROVIDER_ORDER = parseList(process.env.TTS_PROVIDER_ORDER || process.env.TTS_PROVIDER || "elevenlabs,openai")
+function parseGoogleCredentials(value) {
+  if (!value) return null;
+
+  const raw = String(value).trim();
+  try {
+    const decoded = Buffer.from(raw, "base64").toString("utf-8");
+    return JSON.parse(decoded);
+  } catch {
+    return JSON.parse(raw);
+  }
+}
+
+const TTS_PROVIDER_ORDER = parseList(process.env.TTS_PROVIDER_ORDER || process.env.TTS_PROVIDER || "elevenlabs,google,openai")
   .map((provider) => provider.toLowerCase());
 
 const OPENAI_API_KEYS = parseList(process.env.OPENAI_API_KEYS || process.env.OPENAI_API_KEY);
@@ -48,22 +61,17 @@ const ELEVENLABS_VOICE_IDS = parseList(process.env.ELEVENLABS_VOICE_IDS || proce
 const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || "eleven_multilingual_v2";
 const ELEVENLABS_OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_44100_128";
 
+const GOOGLE_TTS_CREDENTIALS = parseGoogleCredentials(process.env.GOOGLE_TTS_CREDENTIALS_B64 || process.env.GOOGLE_TTS_CREDENTIALS_JSON || "");
+const GOOGLE_TTS_VOICES = parseList(process.env.GOOGLE_TTS_VOICES || process.env.GOOGLE_TTS_VOICE || "pt-BR-Wavenet-A");
+const GOOGLE_TTS_LANGUAGE_CODE = process.env.GOOGLE_TTS_LANGUAGE_CODE || "pt-BR";
+const GOOGLE_TTS_AUDIO_ENCODING = process.env.GOOGLE_TTS_AUDIO_ENCODING || "MP3";
+const GOOGLE_TTS_SPEAKING_RATE = Number(process.env.GOOGLE_TTS_SPEAKING_RATE || 1);
+const GOOGLE_TTS_PITCH = Number(process.env.GOOGLE_TTS_PITCH || 0);
+
 function buildTtsCandidates() {
   const candidates = [];
 
   for (const provider of TTS_PROVIDER_ORDER) {
-    if (provider === "openai") {
-      OPENAI_API_KEYS.forEach((apiKey, index) => {
-        candidates.push({
-          provider: "openai",
-          label: `openai#${index + 1}`,
-          apiKey,
-          model: TTS_MODEL,
-          voice: TTS_VOICE
-        });
-      });
-    }
-
     if (provider === "elevenlabs") {
       ELEVENLABS_API_KEYS.forEach((apiKey, index) => {
         const voiceId = ELEVENLABS_VOICE_IDS[index] || ELEVENLABS_VOICE_IDS[0];
@@ -75,6 +83,35 @@ function buildTtsCandidates() {
           voiceId,
           model: ELEVENLABS_MODEL_ID,
           outputFormat: ELEVENLABS_OUTPUT_FORMAT
+        });
+      });
+    }
+
+    if (provider === "google") {
+      if (GOOGLE_TTS_CREDENTIALS) {
+        GOOGLE_TTS_VOICES.forEach((voice, index) => {
+          candidates.push({
+            provider: "google",
+            label: `google#${index + 1}`,
+            credentials: GOOGLE_TTS_CREDENTIALS,
+            voice,
+            languageCode: GOOGLE_TTS_LANGUAGE_CODE,
+            audioEncoding: GOOGLE_TTS_AUDIO_ENCODING,
+            speakingRate: GOOGLE_TTS_SPEAKING_RATE,
+            pitch: GOOGLE_TTS_PITCH
+          });
+        });
+      }
+    }
+
+    if (provider === "openai") {
+      OPENAI_API_KEYS.forEach((apiKey, index) => {
+        candidates.push({
+          provider: "openai",
+          label: `openai#${index + 1}`,
+          apiKey,
+          model: TTS_MODEL,
+          voice: TTS_VOICE
         });
       });
     }
@@ -216,15 +253,35 @@ async function generateWithElevenLabs(candidate, chunk) {
   return Buffer.from(await response.arrayBuffer());
 }
 
+async function generateWithGoogle(candidate, chunk) {
+  const client = new textToSpeech.TextToSpeechClient({ credentials: candidate.credentials });
+  const [response] = await client.synthesizeSpeech({
+    input: { text: chunk.text },
+    voice: {
+      languageCode: candidate.languageCode,
+      name: candidate.voice
+    },
+    audioConfig: {
+      audioEncoding: candidate.audioEncoding,
+      speakingRate: candidate.speakingRate,
+      pitch: candidate.pitch
+    }
+  });
+
+  if (!response.audioContent) throw new Error("Google TTS não retornou audioContent.");
+  return Buffer.from(response.audioContent);
+}
+
 async function generateFromCandidate(candidate, chunk, query = {}) {
   if (candidate.provider === "elevenlabs") return generateWithElevenLabs(candidate, chunk);
+  if (candidate.provider === "google") return generateWithGoogle(candidate, chunk);
   if (candidate.provider === "openai") return generateWithOpenAI(candidate, chunk, query);
   throw new Error(`Provider não suportado: ${candidate.provider}`);
 }
 
 async function generateAudio(chunk, query = {}) {
   if (!TTS_CANDIDATES.length) {
-    throw new Error("Nenhum provedor TTS configurado. Configure ELEVENLABS_API_KEYS/ELEVENLABS_VOICE_IDS ou OPENAI_API_KEYS.");
+    throw new Error("Nenhum provedor TTS configurado. Configure ELEVENLABS_API_KEYS/ELEVENLABS_VOICE_IDS, GOOGLE_TTS_CREDENTIALS_B64/JSON ou OPENAI_API_KEYS.");
   }
 
   const failures = [];

@@ -28,18 +28,62 @@ const upload = multer({ dest: uploadDir, limits: { fileSize: 30 * 1024 * 1024 } 
 const PORT = Number(process.env.PORT || 3001);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
 const APP_SECRET = process.env.APP_SECRET;
-const TTS_PROVIDER = (process.env.TTS_PROVIDER || "openai").toLowerCase();
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+function parseList(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+const TTS_PROVIDER_ORDER = parseList(process.env.TTS_PROVIDER_ORDER || process.env.TTS_PROVIDER || "elevenlabs,openai")
+  .map((provider) => provider.toLowerCase());
+
+const OPENAI_API_KEYS = parseList(process.env.OPENAI_API_KEYS || process.env.OPENAI_API_KEY);
 const TTS_MODEL = process.env.TTS_MODEL || "gpt-4o-mini-tts";
 const TTS_VOICE = process.env.TTS_VOICE || "marin";
 
-const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
-const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID;
+const ELEVENLABS_API_KEYS = parseList(process.env.ELEVENLABS_API_KEYS || process.env.ELEVENLABS_API_KEY);
+const ELEVENLABS_VOICE_IDS = parseList(process.env.ELEVENLABS_VOICE_IDS || process.env.ELEVENLABS_VOICE_ID);
 const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || "eleven_multilingual_v2";
 const ELEVENLABS_OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_44100_128";
 
-const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+function buildTtsCandidates() {
+  const candidates = [];
+
+  for (const provider of TTS_PROVIDER_ORDER) {
+    if (provider === "openai") {
+      OPENAI_API_KEYS.forEach((apiKey, index) => {
+        candidates.push({
+          provider: "openai",
+          label: `openai#${index + 1}`,
+          apiKey,
+          model: TTS_MODEL,
+          voice: TTS_VOICE
+        });
+      });
+    }
+
+    if (provider === "elevenlabs") {
+      ELEVENLABS_API_KEYS.forEach((apiKey, index) => {
+        const voiceId = ELEVENLABS_VOICE_IDS[index] || ELEVENLABS_VOICE_IDS[0];
+        if (!voiceId) return;
+        candidates.push({
+          provider: "elevenlabs",
+          label: `elevenlabs#${index + 1}`,
+          apiKey,
+          voiceId,
+          model: ELEVENLABS_MODEL_ID,
+          outputFormat: ELEVENLABS_OUTPUT_FORMAT
+        });
+      });
+    }
+  }
+
+  return candidates;
+}
+
+const TTS_CANDIDATES = buildTtsCandidates();
 
 app.use(cors({ origin: CORS_ORIGIN === "*" ? true : CORS_ORIGIN, credentials: true }));
 app.use(express.json({ limit: "2mb" }));
@@ -116,6 +160,8 @@ function makeBook({ title, sourceType, text }) {
       text: chunkText,
       audioFile: null,
       status: "pending",
+      ttsProvider: null,
+      ttsLabel: null,
       createdAt: now,
       updatedAt: now
     }))
@@ -126,11 +172,11 @@ function audioPath(chunkId) {
   return path.join(audioDir, `${chunkId}.mp3`);
 }
 
-async function generateWithOpenAI(chunk, query = {}) {
-  if (!openai) throw new Error("OPENAI_API_KEY não configurada.");
+async function generateWithOpenAI(candidate, chunk, query = {}) {
+  const openai = new OpenAI({ apiKey: candidate.apiKey });
   const mp3 = await openai.audio.speech.create({
-    model: TTS_MODEL,
-    voice: query.voice || TTS_VOICE,
+    model: candidate.model,
+    voice: query.voice || candidate.voice,
     input: chunk.text,
     instructions: "Leia em português brasileiro, com ritmo natural de professor de cursinho, pausas claras e dicção limpa.",
     response_format: "mp3",
@@ -139,21 +185,18 @@ async function generateWithOpenAI(chunk, query = {}) {
   return Buffer.from(await mp3.arrayBuffer());
 }
 
-async function generateWithElevenLabs(chunk) {
-  if (!ELEVENLABS_API_KEY) throw new Error("ELEVENLABS_API_KEY não configurada.");
-  if (!ELEVENLABS_VOICE_ID) throw new Error("ELEVENLABS_VOICE_ID não configurado.");
-
-  const url = `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}?output_format=${ELEVENLABS_OUTPUT_FORMAT}`;
+async function generateWithElevenLabs(candidate, chunk) {
+  const url = `https://api.elevenlabs.io/v1/text-to-speech/${candidate.voiceId}?output_format=${candidate.outputFormat}`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
-      "xi-api-key": ELEVENLABS_API_KEY,
+      "xi-api-key": candidate.apiKey,
       "Content-Type": "application/json",
       "Accept": "audio/mpeg"
     },
     body: JSON.stringify({
       text: chunk.text,
-      model_id: ELEVENLABS_MODEL_ID,
+      model_id: candidate.model,
       voice_settings: {
         stability: 0.55,
         similarity_boost: 0.75,
@@ -165,20 +208,49 @@ async function generateWithElevenLabs(chunk) {
 
   if (!response.ok) {
     const details = await response.text().catch(() => "");
-    throw new Error(`Erro ElevenLabs ${response.status}: ${details.slice(0, 300)}`);
+    const error = new Error(`Erro ElevenLabs ${response.status}: ${details.slice(0, 300)}`);
+    error.status = response.status;
+    throw error;
   }
 
   return Buffer.from(await response.arrayBuffer());
 }
 
-async function generateAudio(chunk, query = {}) {
-  const buffer = TTS_PROVIDER === "elevenlabs"
-    ? await generateWithElevenLabs(chunk)
-    : await generateWithOpenAI(chunk, query);
-  await fs.writeFile(audioPath(chunk.id), buffer);
+async function generateFromCandidate(candidate, chunk, query = {}) {
+  if (candidate.provider === "elevenlabs") return generateWithElevenLabs(candidate, chunk);
+  if (candidate.provider === "openai") return generateWithOpenAI(candidate, chunk, query);
+  throw new Error(`Provider não suportado: ${candidate.provider}`);
 }
 
-app.get("/health", (_req, res) => res.json({ ok: true, service: "gabriel-audio-study", ttsProvider: TTS_PROVIDER }));
+async function generateAudio(chunk, query = {}) {
+  if (!TTS_CANDIDATES.length) {
+    throw new Error("Nenhum provedor TTS configurado. Configure ELEVENLABS_API_KEYS/ELEVENLABS_VOICE_IDS ou OPENAI_API_KEYS.");
+  }
+
+  const failures = [];
+
+  for (const candidate of TTS_CANDIDATES) {
+    try {
+      console.log(`Tentando TTS: ${candidate.label}`);
+      const buffer = await generateFromCandidate(candidate, chunk, query);
+      await fs.writeFile(audioPath(chunk.id), buffer);
+      return { provider: candidate.provider, label: candidate.label };
+    } catch (error) {
+      const reason = error?.message || String(error);
+      failures.push(`${candidate.label}: ${reason}`);
+      console.warn(`Falha em ${candidate.label}; tentando próximo fallback.`, reason);
+    }
+  }
+
+  throw new Error(`Todos os provedores TTS falharam. ${failures.join(" | ")}`);
+}
+
+app.get("/health", (_req, res) => res.json({
+  ok: true,
+  service: "gabriel-audio-study",
+  ttsProviderOrder: TTS_PROVIDER_ORDER,
+  ttsCandidates: TTS_CANDIDATES.map((candidate) => candidate.label)
+}));
 app.post("/api/auth/check", requireAuth, (_req, res) => res.json({ ok: true }));
 
 app.get("/api/books", requireAuth, async (_req, res) => {
@@ -199,6 +271,8 @@ app.get("/api/books/:bookId", requireAuth, async (req, res) => {
     orderIndex: c.orderIndex,
     title: c.title,
     status: c.status,
+    ttsProvider: c.ttsProvider,
+    ttsLabel: c.ttsLabel,
     textPreview: c.text.slice(0, 180)
   }));
   res.json({ book, chunks });
@@ -247,9 +321,11 @@ app.get("/api/books/:bookId/chunks/:chunkId/audio", requireAuth, async (req, res
     } catch {
       chunk.status = "generating";
       await writeDb(db);
-      await generateAudio(chunk, req.query);
+      const result = await generateAudio(chunk, req.query);
       chunk.status = "ready";
       chunk.audioFile = `${chunk.id}.mp3`;
+      chunk.ttsProvider = result.provider;
+      chunk.ttsLabel = result.label;
       chunk.updatedAt = new Date().toISOString();
       await writeDb(db);
     }
@@ -290,7 +366,7 @@ ensureStorage().then(async () => {
   const servingClient = await serveClient();
   app.listen(PORT, () => {
     console.log(`Gabriel Audio Study rodando em http://localhost:${PORT}`);
-    console.log(`TTS provider: ${TTS_PROVIDER}`);
+    console.log(`TTS candidates: ${TTS_CANDIDATES.map((candidate) => candidate.label).join(", ") || "nenhum"}`);
     console.log(servingClient ? "PWA servida pelo Express." : "client/dist não encontrado; rode o client em dev ou build.");
   });
 });

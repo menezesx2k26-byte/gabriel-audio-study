@@ -26,9 +26,9 @@ services:
       - key: AWS_POLLY_REGIONS
         value: us-east-1
       - key: AWS_POLLY_VOICES
-        value: Camila,Vitoria,Ricardo
+        value: Camila
       - key: AWS_POLLY_ENGINE
-        value: neural
+        value: generative
       - key: AWS_POLLY_OUTPUT_FORMAT
         value: mp3
       - key: AWS_POLLY_SAMPLE_RATE

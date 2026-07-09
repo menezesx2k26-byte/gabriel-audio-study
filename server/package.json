@@ -1,0 +1,20 @@
+{
+  "name": "gabriel-audio-study-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "nanoid": "^5.0.7",
+    "openai": "^4.104.0",
+    "pdf-parse": "^1.1.1"
+  }
+}

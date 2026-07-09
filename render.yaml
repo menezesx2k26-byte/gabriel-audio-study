@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: gabriel-audio-study
+    env: docker
+    plan: starter
+    autoDeploy: false
+    disk:
+      name: audio-study-storage
+      mountPath: /app/server/storage
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: TTS_MODEL
+        value: gpt-4o-mini-tts
+      - key: TTS_VOICE
+        value: marin
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: APP_SECRET
+        sync: false
+      - key: CORS_ORIGIN
+        value: https://troque-pelo-seu-dominio-ou-url-do-render

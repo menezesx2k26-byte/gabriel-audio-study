@@ -18,19 +18,21 @@ services:
       - key: CORS_ORIGIN
         value: https://troque-pelo-seu-dominio-ou-url-do-render
       - key: TTS_PROVIDER_ORDER
-        value: google,elevenlabs,openai
-      - key: GOOGLE_TTS_CREDENTIALS_B64
+        value: polly,elevenlabs,openai
+      - key: AWS_POLLY_ACCESS_KEY_IDS
         sync: false
-      - key: GOOGLE_TTS_VOICES
-        value: pt-BR-Wavenet-A,pt-BR-Wavenet-B
-      - key: GOOGLE_TTS_LANGUAGE_CODE
-        value: pt-BR
-      - key: GOOGLE_TTS_AUDIO_ENCODING
-        value: MP3
-      - key: GOOGLE_TTS_SPEAKING_RATE
-        value: 1
-      - key: GOOGLE_TTS_PITCH
-        value: 0
+      - key: AWS_POLLY_SECRET_ACCESS_KEYS
+        sync: false
+      - key: AWS_POLLY_REGIONS
+        value: us-east-1
+      - key: AWS_POLLY_VOICES
+        value: Camila,Vitoria,Ricardo
+      - key: AWS_POLLY_ENGINE
+        value: neural
+      - key: AWS_POLLY_OUTPUT_FORMAT
+        value: mp3
+      - key: AWS_POLLY_SAMPLE_RATE
+        value: 24000
       - key: ELEVENLABS_API_KEYS
         sync: false
       - key: ELEVENLABS_VOICE_IDS

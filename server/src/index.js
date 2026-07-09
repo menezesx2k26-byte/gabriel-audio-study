@@ -24,15 +24,24 @@ const clientDistDir = path.resolve(serverRoot, "..", "client", "dist");
 
 const app = express();
 const upload = multer({ dest: uploadDir, limits: { fileSize: 30 * 1024 * 1024 } });
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const PORT = Number(process.env.PORT || 3001);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
 const APP_SECRET = process.env.APP_SECRET;
+const TTS_PROVIDER = (process.env.TTS_PROVIDER || "openai").toLowerCase();
+
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const TTS_MODEL = process.env.TTS_MODEL || "gpt-4o-mini-tts";
 const TTS_VOICE = process.env.TTS_VOICE || "marin";
 
-app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID;
+const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || "eleven_multilingual_v2";
+const ELEVENLABS_OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_44100_128";
+
+const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+
+app.use(cors({ origin: CORS_ORIGIN === "*" ? true : CORS_ORIGIN, credentials: true }));
 app.use(express.json({ limit: "2mb" }));
 
 async function ensureStorage() {
@@ -117,7 +126,8 @@ function audioPath(chunkId) {
   return path.join(audioDir, `${chunkId}.mp3`);
 }
 
-async function generateAudio(chunk, query = {}) {
+async function generateWithOpenAI(chunk, query = {}) {
+  if (!openai) throw new Error("OPENAI_API_KEY não configurada.");
   const mp3 = await openai.audio.speech.create({
     model: TTS_MODEL,
     voice: query.voice || TTS_VOICE,
@@ -126,11 +136,49 @@ async function generateAudio(chunk, query = {}) {
     response_format: "mp3",
     speed: Number(query.speed || 1)
   });
-  const buffer = Buffer.from(await mp3.arrayBuffer());
+  return Buffer.from(await mp3.arrayBuffer());
+}
+
+async function generateWithElevenLabs(chunk) {
+  if (!ELEVENLABS_API_KEY) throw new Error("ELEVENLABS_API_KEY não configurada.");
+  if (!ELEVENLABS_VOICE_ID) throw new Error("ELEVENLABS_VOICE_ID não configurado.");
+
+  const url = `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}?output_format=${ELEVENLABS_OUTPUT_FORMAT}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "xi-api-key": ELEVENLABS_API_KEY,
+      "Content-Type": "application/json",
+      "Accept": "audio/mpeg"
+    },
+    body: JSON.stringify({
+      text: chunk.text,
+      model_id: ELEVENLABS_MODEL_ID,
+      voice_settings: {
+        stability: 0.55,
+        similarity_boost: 0.75,
+        style: 0.15,
+        use_speaker_boost: true
+      }
+    })
+  });
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => "");
+    throw new Error(`Erro ElevenLabs ${response.status}: ${details.slice(0, 300)}`);
+  }
+
+  return Buffer.from(await response.arrayBuffer());
+}
+
+async function generateAudio(chunk, query = {}) {
+  const buffer = TTS_PROVIDER === "elevenlabs"
+    ? await generateWithElevenLabs(chunk)
+    : await generateWithOpenAI(chunk, query);
   await fs.writeFile(audioPath(chunk.id), buffer);
 }
 
-app.get("/health", (_req, res) => res.json({ ok: true, service: "gabriel-audio-study" }));
+app.get("/health", (_req, res) => res.json({ ok: true, service: "gabriel-audio-study", ttsProvider: TTS_PROVIDER }));
 app.post("/api/auth/check", requireAuth, (_req, res) => res.json({ ok: true }));
 
 app.get("/api/books", requireAuth, async (_req, res) => {
@@ -210,7 +258,7 @@ app.get("/api/books/:bookId/chunks/:chunkId/audio", requireAuth, async (req, res
     createReadStream(audioPath(chunk.id)).pipe(res);
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Erro ao gerar áudio." });
+    res.status(500).json({ error: error.message || "Erro ao gerar áudio." });
   }
 });
 
@@ -242,6 +290,7 @@ ensureStorage().then(async () => {
   const servingClient = await serveClient();
   app.listen(PORT, () => {
     console.log(`Gabriel Audio Study rodando em http://localhost:${PORT}`);
+    console.log(`TTS provider: ${TTS_PROVIDER}`);
     console.log(servingClient ? "PWA servida pelo Express." : "client/dist não encontrado; rode o client em dev ou build.");
   });
 });

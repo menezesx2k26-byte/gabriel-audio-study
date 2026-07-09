@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { PollyClient, SynthesizeSpeechCommand } from "@aws-sdk/client-polly";
 import textToSpeech from "@google-cloud/text-to-speech";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -49,7 +50,19 @@ function parseGoogleCredentials(value) {
   }
 }
 
-const TTS_PROVIDER_ORDER = parseList(process.env.TTS_PROVIDER_ORDER || process.env.TTS_PROVIDER || "elevenlabs,google,openai")
+async function streamToBuffer(stream) {
+  if (!stream) return Buffer.alloc(0);
+  if (Buffer.isBuffer(stream)) return stream;
+  if (stream instanceof Uint8Array) return Buffer.from(stream);
+
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+const TTS_PROVIDER_ORDER = parseList(process.env.TTS_PROVIDER_ORDER || process.env.TTS_PROVIDER || "elevenlabs,polly,google,openai")
   .map((provider) => provider.toLowerCase());
 
 const OPENAI_API_KEYS = parseList(process.env.OPENAI_API_KEYS || process.env.OPENAI_API_KEY);
@@ -60,6 +73,14 @@ const ELEVENLABS_API_KEYS = parseList(process.env.ELEVENLABS_API_KEYS || process
 const ELEVENLABS_VOICE_IDS = parseList(process.env.ELEVENLABS_VOICE_IDS || process.env.ELEVENLABS_VOICE_ID);
 const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || "eleven_multilingual_v2";
 const ELEVENLABS_OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_44100_128";
+
+const AWS_POLLY_ACCESS_KEY_IDS = parseList(process.env.AWS_POLLY_ACCESS_KEY_IDS || process.env.AWS_ACCESS_KEY_ID);
+const AWS_POLLY_SECRET_ACCESS_KEYS = parseList(process.env.AWS_POLLY_SECRET_ACCESS_KEYS || process.env.AWS_SECRET_ACCESS_KEY);
+const AWS_POLLY_REGIONS = parseList(process.env.AWS_POLLY_REGIONS || process.env.AWS_REGION || "us-east-1");
+const AWS_POLLY_VOICES = parseList(process.env.AWS_POLLY_VOICES || process.env.AWS_POLLY_VOICE || "Camila");
+const AWS_POLLY_ENGINE = process.env.AWS_POLLY_ENGINE || "neural";
+const AWS_POLLY_OUTPUT_FORMAT = process.env.AWS_POLLY_OUTPUT_FORMAT || "mp3";
+const AWS_POLLY_SAMPLE_RATE = process.env.AWS_POLLY_SAMPLE_RATE || "24000";
 
 const GOOGLE_TTS_CREDENTIALS = parseGoogleCredentials(process.env.GOOGLE_TTS_CREDENTIALS_B64 || process.env.GOOGLE_TTS_CREDENTIALS_JSON || "");
 const GOOGLE_TTS_VOICES = parseList(process.env.GOOGLE_TTS_VOICES || process.env.GOOGLE_TTS_VOICE || "pt-BR-Wavenet-A");
@@ -83,6 +104,28 @@ function buildTtsCandidates() {
           voiceId,
           model: ELEVENLABS_MODEL_ID,
           outputFormat: ELEVENLABS_OUTPUT_FORMAT
+        });
+      });
+    }
+
+    if (["polly", "aws", "amazon"].includes(provider)) {
+      AWS_POLLY_ACCESS_KEY_IDS.forEach((accessKeyId, keyIndex) => {
+        const secretAccessKey = AWS_POLLY_SECRET_ACCESS_KEYS[keyIndex] || AWS_POLLY_SECRET_ACCESS_KEYS[0];
+        const region = AWS_POLLY_REGIONS[keyIndex] || AWS_POLLY_REGIONS[0] || "us-east-1";
+        if (!accessKeyId || !secretAccessKey) return;
+
+        AWS_POLLY_VOICES.forEach((voice, voiceIndex) => {
+          candidates.push({
+            provider: "polly",
+            label: `polly#${keyIndex + 1}.${voice}`,
+            accessKeyId,
+            secretAccessKey,
+            region,
+            voice,
+            engine: AWS_POLLY_ENGINE,
+            outputFormat: AWS_POLLY_OUTPUT_FORMAT,
+            sampleRate: AWS_POLLY_SAMPLE_RATE
+          });
         });
       });
     }
@@ -253,6 +296,29 @@ async function generateWithElevenLabs(candidate, chunk) {
   return Buffer.from(await response.arrayBuffer());
 }
 
+async function generateWithPolly(candidate, chunk) {
+  const client = new PollyClient({
+    region: candidate.region,
+    credentials: {
+      accessKeyId: candidate.accessKeyId,
+      secretAccessKey: candidate.secretAccessKey
+    }
+  });
+
+  const command = new SynthesizeSpeechCommand({
+    Text: chunk.text,
+    OutputFormat: candidate.outputFormat,
+    VoiceId: candidate.voice,
+    Engine: candidate.engine,
+    SampleRate: candidate.sampleRate
+  });
+
+  const response = await client.send(command);
+  const buffer = await streamToBuffer(response.AudioStream);
+  if (!buffer.length) throw new Error("Amazon Polly não retornou AudioStream.");
+  return buffer;
+}
+
 async function generateWithGoogle(candidate, chunk) {
   const client = new textToSpeech.TextToSpeechClient({ credentials: candidate.credentials });
   const [response] = await client.synthesizeSpeech({
@@ -274,6 +340,7 @@ async function generateWithGoogle(candidate, chunk) {
 
 async function generateFromCandidate(candidate, chunk, query = {}) {
   if (candidate.provider === "elevenlabs") return generateWithElevenLabs(candidate, chunk);
+  if (candidate.provider === "polly") return generateWithPolly(candidate, chunk);
   if (candidate.provider === "google") return generateWithGoogle(candidate, chunk);
   if (candidate.provider === "openai") return generateWithOpenAI(candidate, chunk, query);
   throw new Error(`Provider não suportado: ${candidate.provider}`);
@@ -281,7 +348,7 @@ async function generateFromCandidate(candidate, chunk, query = {}) {
 
 async function generateAudio(chunk, query = {}) {
   if (!TTS_CANDIDATES.length) {
-    throw new Error("Nenhum provedor TTS configurado. Configure ELEVENLABS_API_KEYS/ELEVENLABS_VOICE_IDS, GOOGLE_TTS_CREDENTIALS_B64/JSON ou OPENAI_API_KEYS.");
+    throw new Error("Nenhum provedor TTS configurado. Configure ELEVENLABS, AWS Polly, Google TTS ou OpenAI.");
   }
 
   const failures = [];

@@ -8,14 +8,13 @@ button.ghost { background: rgba(255,255,255,.08); }
 button.danger { background: rgba(255,67,67,.22); color: #ffb4b4; }
 input, textarea, select { width: 100%; border: 1px solid rgba(255,255,255,.11); border-radius: 14px; padding: .9rem 1rem; background: rgba(255,255,255,.06); color: #fff; }
 textarea { min-height: 150px; resize: vertical; }
-code { background: rgba(255,255,255,.1); border-radius: 8px; padding: .15rem .35rem; }
 .screen { width: min(1100px, 100%); margin: 0 auto; padding: 1.2rem; }
 .center { min-height: 100vh; display: grid; place-items: center; }
 .card { background: rgba(255,255,255,.075); border: 1px solid rgba(255,255,255,.11); border-radius: 28px; padding: 1.2rem; box-shadow: 0 20px 80px rgba(0,0,0,.35); backdrop-filter: blur(16px); }
 .login { width: min(440px, 100%); }
 .stack { display: grid; gap: .9rem; }
-.top, .section-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
-h1, h2, h3, p { margin-top: 0; }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+h1, h2, p { margin-top: 0; }
 p { color: #cfcfd7; }
 .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .list { margin-top: 1rem; display: grid; gap: .75rem; }
@@ -29,12 +28,4 @@ audio { width: 100%; }
 .controls button { min-width: 110px; }
 .preview { border-left: 4px solid #ff2f6d; padding-left: 1rem; color: #ddd; }
 .error { color: #ffb4b4; font-weight: 700; }
-.hint { font-size: .95rem; color: #b8b8c4; }
-.diagnostics { margin-top: 1rem; }
-.success-box { display: grid; gap: .65rem; border: 1px solid rgba(80,255,150,.28); background: rgba(80,255,150,.08); border-radius: 18px; padding: 1rem; }
-.success-box textarea { min-height: 74px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.diagnostic-account { border: 1px solid rgba(255,255,255,.1); border-radius: 18px; padding: 1rem; background: rgba(255,255,255,.045); }
-.diagnostic-account ul { display: grid; gap: .5rem; padding-left: 1.2rem; margin-bottom: 0; }
-.diagnostic-account li { color: #e6e6ea; }
-.diagnostic-account li span { color: #b8b8c4; }
-@media (max-width: 760px) { .grid { grid-template-columns: 1fr; } .top, .section-head { align-items: flex-start; flex-direction: column; } .book { grid-template-columns: 1fr; } .controls button { flex: 1; } .settings-row { flex-direction: column; } }
+@media (max-width: 760px) { .grid { grid-template-columns: 1fr; } .top { align-items: flex-start; flex-direction: column; } .book { grid-template-columns: 1fr; } .controls button { flex: 1; } .settings-row { flex-direction: column; } }

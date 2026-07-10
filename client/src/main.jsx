@@ -55,6 +55,35 @@ function Login({ onLogin }) {
   return <main className="screen center"><section className="card login"><h1>Audio Study</h1><p>Teu leitor privado de PDF/texto com voz de estudo.</p><form onSubmit={submit} className="stack"><input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="APP_SECRET" autoFocus />{error && <p className="error">{error}</p>}<button disabled={!token}>Entrar</button></form></section></main>;
 }
 
+function VoiceDiagnostics({ token }) {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  async function run() {
+    setLoading(true);
+    setError("");
+    setCopied(false);
+    try {
+      const data = await apiJson("/api/elevenlabs/diagnose-voices?max=30", token);
+      setResult(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function copySuggested() {
+    if (!result?.suggestedEnv) return;
+    await navigator.clipboard?.writeText(result.suggestedEnv).catch(() => {});
+    setCopied(true);
+  }
+
+  return <section className="card stack diagnostics"><div className="section-head"><div><h2>Diagnóstico ElevenLabs</h2><p>Testa as vozes das suas keys e mostra quais funcionam no plano atual.</p></div><button type="button" onClick={run} disabled={loading}>{loading ? "Testando..." : "Testar vozes"}</button></div>{error && <p className="error">{error}</p>}{result && <div className="stack"><p className="hint">Frase usada: “{result.testedPhrase}”</p>{result.suggestedEnv ? <div className="success-box"><strong>Vozes que passaram:</strong><textarea readOnly value={result.suggestedEnv} /><button type="button" className="ghost" onClick={copySuggested}>{copied ? "Copiado" : "Copiar para ELEVENLABS_VOICE_IDS"}</button><p>Copie esse valor e cole no Render em <code>ELEVENLABS_VOICE_IDS</code>.</p></div> : <p className="error">Nenhuma voz passou. Essa conta/key provavelmente está limitada pelo plano free ou só tem voz de Library bloqueada.</p>}{result.accounts?.map((account) => <article className="diagnostic-account" key={account.keyLabel}><h3>{account.keyLabel}</h3>{account.error ? <p className="error">{account.error}</p> : <><p>{account.working?.length || 0} funcionando / {account.tested || 0} testadas</p>{account.working?.length ? <ul>{account.working.slice(0, 8).map((voice) => <li key={voice.voiceId}><strong>{voice.name}</strong> <code>{voice.voiceId}</code> <span>{voice.category || "sem categoria"}</span></li>)}</ul> : <p>Nenhuma voz liberada nessa key.</p>}</>}</article>)}</div>}</section>;
+}
+
 function Library({ token, openBook }) {
   const [books, setBooks] = useState([]);
   const [title, setTitle] = useState("");
@@ -101,7 +130,7 @@ function Library({ token, openBook }) {
     await refresh();
   }
 
-  return <main className="screen"><header className="top"><div><h1>Biblioteca</h1><p>Livro → play → continua de onde parou.</p></div><button className="ghost" onClick={refresh}>Atualizar</button></header>{error && <p className="error">{error}</p>}<section className="grid"><form className="card stack" onSubmit={addPdf}><h2>Subir PDF</h2><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Título opcional" /><input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0] || null)} /><button disabled={busy || !file}>{busy ? "Criando..." : "Adicionar PDF"}</button></form><form className="card stack" onSubmit={addText}><h2>Colar texto</h2><textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Cole lei seca, capítulo, resumo..." /><button disabled={busy || !text.trim()}>{busy ? "Criando..." : "Adicionar texto"}</button></form></section><section className="list">{books.map((book) => <article className="book" key={book.id}><button className="book-main" onClick={() => openBook(book.id)}><strong>{book.title}</strong><span>{book.readyChunks}/{book.totalChunks} partes prontas</span></button><button className="danger" onClick={() => deleteBook(book.id)}>Apagar</button></article>)}</section></main>;
+  return <main className="screen"><header className="top"><div><h1>Biblioteca</h1><p>Livro → play → continua de onde parou.</p></div><button className="ghost" onClick={refresh}>Atualizar</button></header>{error && <p className="error">{error}</p>}<section className="grid"><form className="card stack" onSubmit={addPdf}><h2>Subir PDF</h2><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Título opcional" /><input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0] || null)} /><button disabled={busy || !file}>{busy ? "Criando..." : "Adicionar PDF"}</button></form><form className="card stack" onSubmit={addText}><h2>Colar texto</h2><textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Cole lei seca, capítulo, resumo..." /><button disabled={busy || !text.trim()}>{busy ? "Criando..." : "Adicionar texto"}</button></form></section><VoiceDiagnostics token={token} /><section className="list">{books.map((book) => <article className="book" key={book.id}><button className="book-main" onClick={() => openBook(book.id)}><strong>{book.title}</strong><span>{book.readyChunks}/{book.totalChunks} partes prontas</span></button><button className="danger" onClick={() => deleteBook(book.id)}>Apagar</button></article>)}</section></main>;
 }
 
 function Player({ token, bookId, back }) {

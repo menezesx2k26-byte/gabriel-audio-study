@@ -340,6 +340,126 @@ async function generateWithElevenLabs(candidate, chunk) {
   return Buffer.from(await response.arrayBuffer());
 }
 
+function summarizeElevenLabsVoice(voice) {
+  return {
+    voiceId: voice.voice_id,
+    name: voice.name,
+    category: voice.category || null,
+    labels: voice.labels || {},
+    description: voice.description || null,
+    sharing: voice.sharing ? {
+      status: voice.sharing.status || null,
+      freeUsersAllowed: voice.sharing.free_users_allowed ?? null,
+      enabledInLibrary: voice.sharing.enabled_in_library ?? null,
+      category: voice.sharing.category || null,
+      availableForTiers: voice.sharing.available_for_tiers || null
+    } : null
+  };
+}
+
+function parseElevenLabsError(status, details) {
+  try {
+    const parsed = JSON.parse(details || "{}");
+    const detail = parsed.detail || parsed;
+    return {
+      status,
+      type: detail.type || parsed.type || null,
+      code: detail.code || parsed.code || null,
+      message: detail.message || parsed.message || details.slice(0, 240)
+    };
+  } catch {
+    return { status, type: null, code: null, message: String(details || "").slice(0, 240) };
+  }
+}
+
+async function fetchElevenLabsVoices(apiKey) {
+  const response = await fetch("https://api.elevenlabs.io/v2/voices", {
+    headers: { "xi-api-key": apiKey }
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    const error = parseElevenLabsError(response.status, text);
+    throw new Error(`Erro ao listar vozes ElevenLabs ${response.status}: ${error.message || text.slice(0, 200)}`);
+  }
+  const data = JSON.parse(text || "{}");
+  return Array.isArray(data.voices) ? data.voices : [];
+}
+
+async function testElevenLabsVoice(apiKey, voiceId) {
+  const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${ELEVENLABS_OUTPUT_FORMAT}`, {
+    method: "POST",
+    headers: {
+      "xi-api-key": apiKey,
+      "Content-Type": "application/json",
+      "Accept": "audio/mpeg"
+    },
+    body: JSON.stringify({
+      text: "Olá, teste curto em português brasileiro.",
+      model_id: ELEVENLABS_MODEL_ID,
+      voice_settings: {
+        stability: 0.55,
+        similarity_boost: 0.75,
+        style: 0.05,
+        use_speaker_boost: true
+      }
+    })
+  });
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => "");
+    return { ok: false, error: parseElevenLabsError(response.status, details) };
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return { ok: buffer.length > 0, bytes: buffer.length };
+}
+
+async function diagnoseElevenLabsVoices({ maxVoices = 25 } = {}) {
+  const accounts = [];
+
+  for (const [index, apiKey] of ELEVENLABS_API_KEYS.entries()) {
+    const keyLabel = `elevenlabs#${index + 1}`;
+    try {
+      const voices = await fetchElevenLabsVoices(apiKey);
+      const voicesToTest = voices.slice(0, maxVoices);
+      const working = [];
+      const failed = [];
+
+      for (const voice of voicesToTest) {
+        if (!voice.voice_id) continue;
+        const summary = summarizeElevenLabsVoice(voice);
+        const result = await testElevenLabsVoice(apiKey, voice.voice_id);
+        if (result.ok) {
+          working.push({ ...summary, test: { ok: true, bytes: result.bytes } });
+        } else {
+          failed.push({ ...summary, test: { ok: false, error: result.error } });
+        }
+      }
+
+      accounts.push({
+        keyLabel,
+        totalVoicesReturned: voices.length,
+        tested: voicesToTest.length,
+        working,
+        failed,
+        suggestedVoiceId: working[0]?.voiceId || null
+      });
+    } catch (error) {
+      accounts.push({ keyLabel, error: error.message || String(error), working: [], failed: [] });
+    }
+  }
+
+  return {
+    ok: true,
+    warning: "Este diagnóstico testa vozes com uma frase curta e consome poucos caracteres da ElevenLabs. Não expõe suas API keys.",
+    model: ELEVENLABS_MODEL_ID,
+    outputFormat: ELEVENLABS_OUTPUT_FORMAT,
+    testedPhrase: "Olá, teste curto em português brasileiro.",
+    accounts,
+    suggestedEnv: accounts.map((account) => account.suggestedVoiceId).filter(Boolean).join(",") || null
+  };
+}
+
 async function generateWithPolly(candidate, chunk) {
   const client = new PollyClient({
     region: candidate.region,
@@ -429,6 +549,15 @@ app.get("/api/tts/candidates", requireAuth, (_req, res) => {
     auto: { label: "auto", displayName: "Automático: fallback configurado" },
     candidates: TTS_CANDIDATES.map(publicTtsCandidate)
   });
+});
+
+app.get("/api/elevenlabs/diagnose-voices", requireAuth, async (req, res) => {
+  try {
+    const maxVoices = Math.min(Math.max(Number(req.query.max || 25), 1), 60);
+    res.json(await diagnoseElevenLabsVoices({ maxVoices }));
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Erro ao diagnosticar vozes ElevenLabs." });
+  }
 });
 
 app.get("/api/books", requireAuth, async (_req, res) => {

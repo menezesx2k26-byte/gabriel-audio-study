@@ -23,7 +23,9 @@ p { color: #cfcfd7; }
 .book-main span { color: #b8b8c4; font-weight: 500; }
 .player { display: grid; gap: 1rem; margin-top: 1rem; }
 audio { width: 100%; }
-.controls { display: flex; flex-wrap: wrap; gap: .6rem; }
+.controls, .settings-row { display: flex; flex-wrap: wrap; gap: .6rem; }
+.settings-row label { flex: 1 1 240px; display: grid; gap: .35rem; color: #cfcfd7; font-weight: 700; }
+.controls button { min-width: 110px; }
 .preview { border-left: 4px solid #ff2f6d; padding-left: 1rem; color: #ddd; }
 .error { color: #ffb4b4; font-weight: 700; }
-@media (max-width: 760px) { .grid { grid-template-columns: 1fr; } .top { align-items: flex-start; flex-direction: column; } .book { grid-template-columns: 1fr; } .controls button { flex: 1; } }
+@media (max-width: 760px) { .grid { grid-template-columns: 1fr; } .top { align-items: flex-start; flex-direction: column; } .book { grid-template-columns: 1fr; } .controls button { flex: 1; } .settings-row { flex-direction: column; } }

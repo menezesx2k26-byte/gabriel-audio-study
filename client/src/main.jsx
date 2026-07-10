@@ -4,6 +4,7 @@ import "./styles.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 const TOKEN_KEY = "gas_token";
+const TTS_LABEL_KEY = "gas_tts_label";
 
 function authHeaders(token, extra = {}) {
   return { ...extra, Authorization: `Bearer ${token}` };
@@ -111,20 +112,40 @@ function Player({ token, bookId, back }) {
   const [speed, setSpeed] = useState(1);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
+  const [ttsOptions, setTtsOptions] = useState([]);
+  const [ttsLabel, setTtsLabel] = useState(localStorage.getItem(TTS_LABEL_KEY) || "auto");
 
   useEffect(() => {
-    apiJson(`/api/books/${bookId}`, token).then((data) => {
+    Promise.all([
+      apiJson(`/api/books/${bookId}`, token),
+      apiJson("/api/tts/candidates", token).catch(() => ({ candidates: [] }))
+    ]).then(([bookData, ttsData]) => {
       const progress = loadProgress(bookId);
-      setBook(data.book); setChunks(data.chunks || []); setIdx(progress.chunkIndex || 0); setLoading(false);
+      setBook(bookData.book);
+      setChunks(bookData.chunks || []);
+      setTtsOptions(ttsData.candidates || []);
+      setIdx(progress.chunkIndex || 0);
+      setLoading(false);
       setTimeout(() => { if (audioRef.current) audioRef.current.currentTime = progress.time || 0; }, 250);
     }).catch((err) => { setMessage(err.message); setLoading(false); });
   }, [bookId]);
 
   const chunk = chunks[idx];
-  const src = chunk ? `${API_BASE}/api/books/${bookId}/chunks/${chunk.id}/audio?token=${encodeURIComponent(token)}&speed=${speed}` : "";
+  const src = chunk ? `${API_BASE}/api/books/${bookId}/chunks/${chunk.id}/audio?token=${encodeURIComponent(token)}&speed=${speed}&ttsLabel=${encodeURIComponent(ttsLabel)}` : "";
 
   function persist() {
     if (audioRef.current) saveProgress(bookId, idx, audioRef.current.currentTime || 0);
+  }
+
+  function changeVoice(value) {
+    setTtsLabel(value);
+    localStorage.setItem(TTS_LABEL_KEY, value);
+    setMessage(value === "auto" ? "Modo automático: usa a ordem de fallback." : `Voz selecionada: ${value}`);
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.removeAttribute("src");
+      audioRef.current.load();
+    }
   }
 
   async function play() {
@@ -137,7 +158,7 @@ function Player({ token, bookId, back }) {
   function next() { if (idx < chunks.length - 1) { persist(); setIdx(idx + 1); } }
   function prev() { if (idx > 0) { persist(); setIdx(idx - 1); } }
 
-  return <main className="screen"><button className="ghost" onClick={back}>← Biblioteca</button>{loading ? <p>Carregando...</p> : <section className="card player"><h1>{book?.title}</h1><p>Parte {idx + 1} de {chunks.length}: {chunk?.title}</p><p className="preview">{chunk?.textPreview}</p><audio ref={audioRef} controls onTimeUpdate={persist} onEnded={next} onLoadedMetadata={() => { audioRef.current.playbackRate = speed; }} /><div className="controls"><button onClick={prev} disabled={idx === 0}>Anterior</button><button onClick={() => { audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 15); }}>-15s</button><button onClick={play}>Play</button><button onClick={() => { audioRef.current.currentTime += 30; }}>+30s</button><button onClick={next} disabled={idx >= chunks.length - 1}>Próxima</button></div><label>Velocidade<select value={speed} onChange={(e) => { const value = Number(e.target.value); setSpeed(value); if (audioRef.current) audioRef.current.playbackRate = value; }}><option value="1">1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option></select></label>{message && <p>{message}</p>}</section>}</main>;
+  return <main className="screen"><button className="ghost" onClick={back}>← Biblioteca</button>{loading ? <p>Carregando...</p> : <section className="card player"><h1>{book?.title}</h1><p>Parte {idx + 1} de {chunks.length}: {chunk?.title}</p><p className="preview">{chunk?.textPreview}</p><div className="settings-row"><label>Voz<select value={ttsLabel} onChange={(e) => changeVoice(e.target.value)}><option value="auto">Automático / fallback</option>{ttsOptions.map((option) => <option key={option.label} value={option.label}>{option.displayName || option.label}</option>)}</select></label><label>Velocidade<select value={speed} onChange={(e) => { const value = Number(e.target.value); setSpeed(value); if (audioRef.current) audioRef.current.playbackRate = value; }}><option value="1">1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option></select></label></div><audio ref={audioRef} controls onTimeUpdate={persist} onEnded={next} onLoadedMetadata={() => { audioRef.current.playbackRate = speed; }} /><div className="controls"><button onClick={prev} disabled={idx === 0}>Anterior</button><button onClick={() => { audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 15); }}>-15s</button><button onClick={play}>Play</button><button onClick={() => { audioRef.current.currentTime += 30; }}>+30s</button><button onClick={next} disabled={idx >= chunks.length - 1}>Próxima</button></div>{message && <p>{message}</p>}</section>}</main>;
 }
 
 function App() {

@@ -16,9 +16,9 @@ services:
       - key: APP_SECRET
         sync: false
       - key: CORS_ORIGIN
-        value: https://troque-pelo-seu-dominio-ou-url-do-render
+        value: https://gabriel-audio-study.onrender.com
       - key: TTS_PROVIDER_ORDER
-        value: polly,elevenlabs,openai
+        value: azure,polly,elevenlabs,openai
       - key: AWS_POLLY_ACCESS_KEY_IDS
         sync: false
       - key: AWS_POLLY_SECRET_ACCESS_KEYS

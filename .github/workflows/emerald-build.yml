@@ -1,0 +1,53 @@
+name: Emerald HGSS Build
+
+on:
+  push:
+    branches: [emerald-build-v1]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout build branch
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib libpng-dev git unzip python3-pip
+          python3 -m pip install --user gdown
+
+      - name: Checkout Emerald PT-BR source
+        run: |
+          git clone https://github.com/lucmsilva651/esmeralda-ptbr.git emerald
+          cd emerald
+          git checkout 16899178c5d9b198b961c3e38389ccccbdff7836
+
+      - name: Download and apply HGSS v1.0 delta
+        run: |
+          ~/.local/bin/gdown --id 1ItLbuk4mO5EI-61yotnJX0MCwhsA8ykW -O emerald-delta.zip
+          test -s emerald-delta.zip
+          unzip -q -o emerald-delta.zip -d emerald
+          echo "Delta SHA256: $(sha256sum emerald-delta.zip)"
+
+      - name: Build modern ROM
+        working-directory: emerald
+        run: |
+          make -j$(nproc) modern
+          ls -lh *.gba
+          sha256sum *.gba
+
+      - name: Normalize ROM name
+        run: |
+          ROM=$(find emerald -maxdepth 1 -name '*.gba' -type f | head -n 1)
+          test -n "$ROM"
+          cp "$ROM" Pokemon_Emerald_PTBR_HGSS_v1.0.gba
+
+      - name: Upload playable ROM
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pokemon-Emerald-PTBR-HGSS-v1.0
+          path: Pokemon_Emerald_PTBR_HGSS_v1.0.gba
+          if-no-files-found: error
+          retention-days: 7

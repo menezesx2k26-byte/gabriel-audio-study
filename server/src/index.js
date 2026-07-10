@@ -62,7 +62,13 @@ async function streamToBuffer(stream) {
   return Buffer.concat(chunks);
 }
 
-const TTS_PROVIDER_ORDER = parseList(process.env.TTS_PROVIDER_ORDER || process.env.TTS_PROVIDER || "elevenlabs,polly,google,openai")
+function safeCacheKey(value) {
+  return String(value || "auto")
+    .replace(/[^a-zA-Z0-9._-]/g, "_")
+    .slice(0, 90) || "auto";
+}
+
+const TTS_PROVIDER_ORDER = parseList(process.env.TTS_PROVIDER_ORDER || process.env.TTS_PROVIDER || "polly,elevenlabs,openai")
   .map((provider) => provider.toLowerCase());
 
 const OPENAI_API_KEYS = parseList(process.env.OPENAI_API_KEYS || process.env.OPENAI_API_KEY);
@@ -100,6 +106,7 @@ function buildTtsCandidates() {
         candidates.push({
           provider: "elevenlabs",
           label: `elevenlabs#${index + 1}`,
+          displayName: `ElevenLabs ${index + 1}`,
           apiKey,
           voiceId,
           model: ELEVENLABS_MODEL_ID,
@@ -114,10 +121,11 @@ function buildTtsCandidates() {
         const region = AWS_POLLY_REGIONS[keyIndex] || AWS_POLLY_REGIONS[0] || "us-east-1";
         if (!accessKeyId || !secretAccessKey) return;
 
-        AWS_POLLY_VOICES.forEach((voice, voiceIndex) => {
+        AWS_POLLY_VOICES.forEach((voice) => {
           candidates.push({
             provider: "polly",
             label: `polly#${keyIndex + 1}.${voice}`,
+            displayName: `Amazon Polly ${voice} (${AWS_POLLY_ENGINE})`,
             accessKeyId,
             secretAccessKey,
             region,
@@ -136,6 +144,7 @@ function buildTtsCandidates() {
           candidates.push({
             provider: "google",
             label: `google#${index + 1}`,
+            displayName: `Google ${voice}`,
             credentials: GOOGLE_TTS_CREDENTIALS,
             voice,
             languageCode: GOOGLE_TTS_LANGUAGE_CODE,
@@ -152,6 +161,7 @@ function buildTtsCandidates() {
         candidates.push({
           provider: "openai",
           label: `openai#${index + 1}`,
+          displayName: `OpenAI ${TTS_VOICE}`,
           apiKey,
           model: TTS_MODEL,
           voice: TTS_VOICE
@@ -164,6 +174,17 @@ function buildTtsCandidates() {
 }
 
 const TTS_CANDIDATES = buildTtsCandidates();
+
+function publicTtsCandidate(candidate) {
+  return {
+    label: candidate.label,
+    displayName: candidate.displayName || candidate.label,
+    provider: candidate.provider,
+    voice: candidate.voice || null,
+    engine: candidate.engine || null,
+    model: candidate.model || null
+  };
+}
 
 app.use(cors({ origin: CORS_ORIGIN === "*" ? true : CORS_ORIGIN, credentials: true }));
 app.use(express.json({ limit: "2mb" }));
@@ -248,8 +269,31 @@ function makeBook({ title, sourceType, text }) {
   };
 }
 
-function audioPath(chunkId) {
-  return path.join(audioDir, `${chunkId}.mp3`);
+function audioPath(chunkId, cacheKey = "auto") {
+  return path.join(audioDir, `${chunkId}__${safeCacheKey(cacheKey)}.mp3`);
+}
+
+async function deleteAudioVariants(chunkId) {
+  const legacyPath = path.join(audioDir, `${chunkId}.mp3`);
+  await fs.unlink(legacyPath).catch(() => {});
+
+  const files = await fs.readdir(audioDir).catch(() => []);
+  await Promise.all(
+    files
+      .filter((file) => file.startsWith(`${chunkId}__`))
+      .map((file) => fs.unlink(path.join(audioDir, file)).catch(() => {}))
+  );
+}
+
+function selectTtsCandidates(requestedLabel) {
+  const normalized = String(requestedLabel || "auto").trim();
+  if (!normalized || normalized === "auto") return { cacheKey: "auto", candidates: TTS_CANDIDATES };
+
+  const candidate = TTS_CANDIDATES.find((item) => item.label === normalized);
+  if (!candidate) {
+    throw new Error(`Voz não encontrada: ${normalized}. Confira /api/tts/candidates.`);
+  }
+  return { cacheKey: candidate.label, candidates: [candidate] };
 }
 
 async function generateWithOpenAI(candidate, chunk, query = {}) {
@@ -351,14 +395,17 @@ async function generateAudio(chunk, query = {}) {
     throw new Error("Nenhum provedor TTS configurado. Configure ELEVENLABS, AWS Polly, Google TTS ou OpenAI.");
   }
 
+  const requestedLabel = query.ttsLabel || query.voiceMode || query.tts || "auto";
+  const { cacheKey, candidates } = selectTtsCandidates(requestedLabel);
   const failures = [];
 
-  for (const candidate of TTS_CANDIDATES) {
+  for (const candidate of candidates) {
     try {
       console.log(`Tentando TTS: ${candidate.label}`);
       const buffer = await generateFromCandidate(candidate, chunk, query);
-      await fs.writeFile(audioPath(chunk.id), buffer);
-      return { provider: candidate.provider, label: candidate.label };
+      const filePath = audioPath(chunk.id, cacheKey);
+      await fs.writeFile(filePath, buffer);
+      return { provider: candidate.provider, label: candidate.label, cacheKey, filePath };
     } catch (error) {
       const reason = error?.message || String(error);
       failures.push(`${candidate.label}: ${reason}`);
@@ -376,6 +423,13 @@ app.get("/health", (_req, res) => res.json({
   ttsCandidates: TTS_CANDIDATES.map((candidate) => candidate.label)
 }));
 app.post("/api/auth/check", requireAuth, (_req, res) => res.json({ ok: true }));
+
+app.get("/api/tts/candidates", requireAuth, (_req, res) => {
+  res.json({
+    auto: { label: "auto", displayName: "Automático: fallback configurado" },
+    candidates: TTS_CANDIDATES.map(publicTtsCandidate)
+  });
+});
 
 app.get("/api/books", requireAuth, async (_req, res) => {
   const db = await readDb();
@@ -440,22 +494,28 @@ app.get("/api/books/:bookId/chunks/:chunkId/audio", requireAuth, async (req, res
     const db = await readDb();
     const chunk = db.chunks.find((c) => c.bookId === req.params.bookId && c.id === req.params.chunkId);
     if (!chunk) return res.status(404).json({ error: "Trecho não encontrado." });
+
+    const ttsLabel = String(req.query.ttsLabel || req.query.voiceMode || req.query.tts || "auto").trim() || "auto";
+    let filePath = audioPath(chunk.id, ttsLabel);
+
     try {
-      await fs.access(audioPath(chunk.id));
+      await fs.access(filePath);
     } catch {
       chunk.status = "generating";
       await writeDb(db);
-      const result = await generateAudio(chunk, req.query);
+      const result = await generateAudio(chunk, { ...req.query, ttsLabel });
+      filePath = result.filePath;
       chunk.status = "ready";
-      chunk.audioFile = `${chunk.id}.mp3`;
+      chunk.audioFile = path.basename(filePath);
       chunk.ttsProvider = result.provider;
       chunk.ttsLabel = result.label;
       chunk.updatedAt = new Date().toISOString();
       await writeDb(db);
     }
+
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
-    createReadStream(audioPath(chunk.id)).pipe(res);
+    createReadStream(filePath).pipe(res);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: error.message || "Erro ao gerar áudio." });
@@ -468,7 +528,7 @@ app.delete("/api/books/:bookId", requireAuth, async (req, res) => {
   db.books = db.books.filter((b) => b.id !== req.params.bookId);
   db.chunks = db.chunks.filter((c) => c.bookId !== req.params.bookId);
   await writeDb(db);
-  await Promise.all(chunks.map((c) => fs.unlink(audioPath(c.id)).catch(() => {})));
+  await Promise.all(chunks.map((c) => deleteAudioVariants(c.id)));
   res.json({ ok: true });
 });
 

@@ -12,7 +12,7 @@ PWA privada para transformar PDF ou texto em áudio com voz premium, sem você f
 - MP3 salvo de forma invisível em `server/storage/audio`.
 - Biblioteca + player: abrir material, dar play e continuar parte por parte.
 - Fallback automático de TTS: tenta provedores em ordem.
-- Suporte atual: Amazon Polly, ElevenLabs, Google Cloud TTS e OpenAI TTS.
+- Suporte atual: Azure Speech, Amazon Polly, ElevenLabs, Google Cloud TTS e OpenAI TTS.
 - Dockerfile e `render.yaml` para deploy.
 
 ## Estado atual recomendado
@@ -20,7 +20,7 @@ PWA privada para transformar PDF ou texto em áudio com voz premium, sem você f
 O app está pensado para rodar assim:
 
 ```txt
-Amazon Polly Camila Generative -> ElevenLabs -> OpenAI opcional
+Azure Speech -> Amazon Polly Camila Generative -> ElevenLabs própria -> OpenAI opcional
 ```
 
 No Render, o principal é preencher as variáveis abaixo. Não existe senha pronta no GitHub. O `APP_SECRET` é uma senha que você inventa no Render e depois usa para entrar no app.
@@ -33,10 +33,21 @@ Obrigatórias para login e app:
 APP_SECRET=crie_uma_senha_sua_aqui
 CORS_ORIGIN=https://gabriel-audio-study.onrender.com
 PORT=3001
-TTS_PROVIDER_ORDER=polly,elevenlabs,openai
+TTS_PROVIDER_ORDER=azure,polly,elevenlabs,openai
 ```
 
-Amazon Polly, voz principal:
+Azure Speech, trator mais agradável:
+
+```env
+AZURE_SPEECH_KEYS=cole_a_chave_do_recurso_speech
+AZURE_SPEECH_REGIONS=brazilsouth
+AZURE_SPEECH_VOICES=pt-BR-FranciscaNeural,pt-BR-AntonioNeural,pt-BR-ThalitaNeural,pt-BR-YaraNeural
+AZURE_SPEECH_OUTPUT_FORMAT=audio-24khz-160kbitrate-mono-mp3
+AZURE_SPEECH_RATE=0%
+AZURE_SPEECH_PITCH=0%
+```
+
+Amazon Polly, fallback estável:
 
 ```env
 AWS_POLLY_ACCESS_KEY_IDS=cole_o_access_key_id_do_iam
@@ -48,11 +59,11 @@ AWS_POLLY_OUTPUT_FORMAT=mp3
 AWS_POLLY_SAMPLE_RATE=24000
 ```
 
-ElevenLabs, fallback premium:
+ElevenLabs, fallback premium pontual:
 
 ```env
 ELEVENLABS_API_KEYS=cole_a_key_da_elevenlabs
-ELEVENLABS_VOICE_IDS=cole_o_voice_id_da_voz
+ELEVENLABS_VOICE_IDS=cole_o_voice_id_da_voz_propria
 ELEVENLABS_MODEL_ID=eleven_multilingual_v2
 ELEVENLABS_OUTPUT_FORMAT=mp3_44100_128
 ```
@@ -99,20 +110,25 @@ Se `APP_SECRET` não existir no Render, nenhuma senha funciona.
 Com:
 
 ```env
-TTS_PROVIDER_ORDER=polly,elevenlabs,openai
+TTS_PROVIDER_ORDER=azure,polly,elevenlabs,openai
+AZURE_SPEECH_KEYS=preenchido
 AWS_POLLY_VOICES=Camila
 ELEVENLABS_API_KEYS=preenchido
 ELEVENLABS_VOICE_IDS=preenchido
 ```
 
-A fila real fica:
+A fila real fica parecida com:
 
 ```txt
+azure#1.Francisca
+azure#1.Antonio
+azure#1.Thalita
+azure#1.Yara
 polly#1.Camila
 elevenlabs#1
 ```
 
-Se Polly falhar por crédito, permissão, limite ou erro de API, ele tenta ElevenLabs. Se OpenAI estiver configurado, ela vira o próximo fallback.
+Se Azure falhar por crédito, região, limite ou erro de API, ele tenta Polly. Se Polly falhar, tenta ElevenLabs. Se OpenAI estiver configurado, ela vira o próximo fallback.
 
 ## Health check
 
@@ -128,8 +144,8 @@ O esperado é algo parecido com:
 {
   "ok": true,
   "service": "gabriel-audio-study",
-  "ttsProviderOrder": ["polly", "elevenlabs", "openai"],
-  "ttsCandidates": ["polly#1.Camila", "elevenlabs#1"]
+  "ttsProviderOrder": ["azure", "polly", "elevenlabs", "openai"],
+  "ttsCandidates": ["azure#1.Francisca", "polly#1.Camila", "elevenlabs#1"]
 }
 ```
 

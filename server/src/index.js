@@ -68,8 +68,36 @@ function safeCacheKey(value) {
     .slice(0, 90) || "auto";
 }
 
-const TTS_PROVIDER_ORDER = parseList(process.env.TTS_PROVIDER_ORDER || process.env.TTS_PROVIDER || "polly,elevenlabs,openai")
+function xmlEscape(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function inferAzureLocale(voice) {
+  const match = String(voice || "").match(/^([a-z]{2,3}-[A-Z]{2})-/);
+  return match?.[1] || "pt-BR";
+}
+
+function azureVoiceNickname(voice) {
+  return String(voice || "voz")
+    .replace(/^pt-BR-/i, "")
+    .replace(/Neural$/i, "")
+    .replace(/:.*$/g, "");
+}
+
+const TTS_PROVIDER_ORDER = parseList(process.env.TTS_PROVIDER_ORDER || process.env.TTS_PROVIDER || "azure,polly,elevenlabs,openai")
   .map((provider) => provider.toLowerCase());
+
+const AZURE_SPEECH_KEYS = parseList(process.env.AZURE_SPEECH_KEYS || process.env.AZURE_SPEECH_KEY);
+const AZURE_SPEECH_REGIONS = parseList(process.env.AZURE_SPEECH_REGIONS || process.env.AZURE_SPEECH_REGION || "brazilsouth");
+const AZURE_SPEECH_VOICES = parseList(process.env.AZURE_SPEECH_VOICES || process.env.AZURE_SPEECH_VOICE || "pt-BR-FranciscaNeural,pt-BR-AntonioNeural,pt-BR-ThalitaNeural,pt-BR-YaraNeural");
+const AZURE_SPEECH_OUTPUT_FORMAT = process.env.AZURE_SPEECH_OUTPUT_FORMAT || "audio-24khz-160kbitrate-mono-mp3";
+const AZURE_SPEECH_RATE = process.env.AZURE_SPEECH_RATE || "0%";
+const AZURE_SPEECH_PITCH = process.env.AZURE_SPEECH_PITCH || "0%";
 
 const OPENAI_API_KEYS = parseList(process.env.OPENAI_API_KEYS || process.env.OPENAI_API_KEY);
 const TTS_MODEL = process.env.TTS_MODEL || "gpt-4o-mini-tts";
@@ -99,6 +127,29 @@ function buildTtsCandidates() {
   const candidates = [];
 
   for (const provider of TTS_PROVIDER_ORDER) {
+    if (["azure", "microsoft"].includes(provider)) {
+      AZURE_SPEECH_KEYS.forEach((apiKey, keyIndex) => {
+        const region = AZURE_SPEECH_REGIONS[keyIndex] || AZURE_SPEECH_REGIONS[0] || "brazilsouth";
+        if (!apiKey || !region) return;
+
+        AZURE_SPEECH_VOICES.forEach((voice) => {
+          const nickname = azureVoiceNickname(voice);
+          candidates.push({
+            provider: "azure",
+            label: `azure#${keyIndex + 1}.${nickname}`,
+            displayName: `Azure ${nickname}`,
+            apiKey,
+            region,
+            voice,
+            languageCode: inferAzureLocale(voice),
+            outputFormat: AZURE_SPEECH_OUTPUT_FORMAT,
+            rate: AZURE_SPEECH_RATE,
+            pitch: AZURE_SPEECH_PITCH
+          });
+        });
+      });
+    }
+
     if (provider === "elevenlabs") {
       ELEVENLABS_API_KEYS.forEach((apiKey, index) => {
         const voiceId = ELEVENLABS_VOICE_IDS[index] || ELEVENLABS_VOICE_IDS[0];
@@ -182,7 +233,8 @@ function publicTtsCandidate(candidate) {
     provider: candidate.provider,
     voice: candidate.voice || null,
     engine: candidate.engine || null,
-    model: candidate.model || null
+    model: candidate.model || null,
+    region: candidate.region || null
   };
 }
 
@@ -340,124 +392,64 @@ async function generateWithElevenLabs(candidate, chunk) {
   return Buffer.from(await response.arrayBuffer());
 }
 
-function summarizeElevenLabsVoice(voice) {
-  return {
-    voiceId: voice.voice_id,
-    name: voice.name,
-    category: voice.category || null,
-    labels: voice.labels || {},
-    description: voice.description || null,
-    sharing: voice.sharing ? {
-      status: voice.sharing.status || null,
-      freeUsersAllowed: voice.sharing.free_users_allowed ?? null,
-      enabledInLibrary: voice.sharing.enabled_in_library ?? null,
-      category: voice.sharing.category || null,
-      availableForTiers: voice.sharing.available_for_tiers || null
-    } : null
-  };
-}
+const azureTokenCache = new Map();
 
-function parseElevenLabsError(status, details) {
-  try {
-    const parsed = JSON.parse(details || "{}");
-    const detail = parsed.detail || parsed;
-    return {
-      status,
-      type: detail.type || parsed.type || null,
-      code: detail.code || parsed.code || null,
-      message: detail.message || parsed.message || details.slice(0, 240)
-    };
-  } catch {
-    return { status, type: null, code: null, message: String(details || "").slice(0, 240) };
-  }
-}
+async function getAzureSpeechToken(candidate) {
+  const cacheKey = `${candidate.region}:${candidate.apiKey.slice(0, 8)}`;
+  const cached = azureTokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.token;
 
-async function fetchElevenLabsVoices(apiKey) {
-  const response = await fetch("https://api.elevenlabs.io/v2/voices", {
-    headers: { "xi-api-key": apiKey }
-  });
-  const text = await response.text();
-  if (!response.ok) {
-    const error = parseElevenLabsError(response.status, text);
-    throw new Error(`Erro ao listar vozes ElevenLabs ${response.status}: ${error.message || text.slice(0, 200)}`);
-  }
-  const data = JSON.parse(text || "{}");
-  return Array.isArray(data.voices) ? data.voices : [];
-}
-
-async function testElevenLabsVoice(apiKey, voiceId) {
-  const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${ELEVENLABS_OUTPUT_FORMAT}`, {
+  const response = await fetch(`https://${candidate.region}.api.cognitive.microsoft.com/sts/v1.0/issueToken`, {
     method: "POST",
     headers: {
-      "xi-api-key": apiKey,
-      "Content-Type": "application/json",
-      "Accept": "audio/mpeg"
-    },
-    body: JSON.stringify({
-      text: "Olá, teste curto em português brasileiro.",
-      model_id: ELEVENLABS_MODEL_ID,
-      voice_settings: {
-        stability: 0.55,
-        similarity_boost: 0.75,
-        style: 0.05,
-        use_speaker_boost: true
-      }
-    })
+      "Ocp-Apim-Subscription-Key": candidate.apiKey,
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Content-Length": "0"
+    }
   });
 
   if (!response.ok) {
     const details = await response.text().catch(() => "");
-    return { ok: false, error: parseElevenLabsError(response.status, details) };
+    throw new Error(`Erro Azure token ${response.status}: ${details.slice(0, 300)}`);
+  }
+
+  const token = await response.text();
+  azureTokenCache.set(cacheKey, { token, expiresAt: Date.now() + 9 * 60 * 1000 });
+  return token;
+}
+
+function buildAzureSsml(candidate, text) {
+  const languageCode = xmlEscape(candidate.languageCode || inferAzureLocale(candidate.voice));
+  const voice = xmlEscape(candidate.voice);
+  const rate = xmlEscape(candidate.rate || "0%");
+  const pitch = xmlEscape(candidate.pitch || "0%");
+  const body = xmlEscape(text);
+
+  return `<speak version='1.0' xml:lang='${languageCode}' xmlns='http://www.w3.org/2001/10/synthesis'><voice name='${voice}' xml:lang='${languageCode}'><prosody rate='${rate}' pitch='${pitch}'>${body}</prosody></voice></speak>`;
+}
+
+async function generateWithAzure(candidate, chunk) {
+  const token = await getAzureSpeechToken(candidate);
+  const response = await fetch(`https://${candidate.region}.tts.speech.microsoft.com/cognitiveservices/v1`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/ssml+xml",
+      "X-Microsoft-OutputFormat": candidate.outputFormat,
+      "User-Agent": "gabriel-audio-study",
+      "Accept": "audio/mpeg"
+    },
+    body: buildAzureSsml(candidate, chunk.text)
+  });
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => "");
+    throw new Error(`Erro Azure Speech ${response.status}: ${details.slice(0, 300)}`);
   }
 
   const buffer = Buffer.from(await response.arrayBuffer());
-  return { ok: buffer.length > 0, bytes: buffer.length };
-}
-
-async function diagnoseElevenLabsVoices({ maxVoices = 25 } = {}) {
-  const accounts = [];
-
-  for (const [index, apiKey] of ELEVENLABS_API_KEYS.entries()) {
-    const keyLabel = `elevenlabs#${index + 1}`;
-    try {
-      const voices = await fetchElevenLabsVoices(apiKey);
-      const voicesToTest = voices.slice(0, maxVoices);
-      const working = [];
-      const failed = [];
-
-      for (const voice of voicesToTest) {
-        if (!voice.voice_id) continue;
-        const summary = summarizeElevenLabsVoice(voice);
-        const result = await testElevenLabsVoice(apiKey, voice.voice_id);
-        if (result.ok) {
-          working.push({ ...summary, test: { ok: true, bytes: result.bytes } });
-        } else {
-          failed.push({ ...summary, test: { ok: false, error: result.error } });
-        }
-      }
-
-      accounts.push({
-        keyLabel,
-        totalVoicesReturned: voices.length,
-        tested: voicesToTest.length,
-        working,
-        failed,
-        suggestedVoiceId: working[0]?.voiceId || null
-      });
-    } catch (error) {
-      accounts.push({ keyLabel, error: error.message || String(error), working: [], failed: [] });
-    }
-  }
-
-  return {
-    ok: true,
-    warning: "Este diagnóstico testa vozes com uma frase curta e consome poucos caracteres da ElevenLabs. Não expõe suas API keys.",
-    model: ELEVENLABS_MODEL_ID,
-    outputFormat: ELEVENLABS_OUTPUT_FORMAT,
-    testedPhrase: "Olá, teste curto em português brasileiro.",
-    accounts,
-    suggestedEnv: accounts.map((account) => account.suggestedVoiceId).filter(Boolean).join(",") || null
-  };
+  if (!buffer.length) throw new Error("Azure Speech não retornou áudio.");
+  return buffer;
 }
 
 async function generateWithPolly(candidate, chunk) {
@@ -503,6 +495,7 @@ async function generateWithGoogle(candidate, chunk) {
 }
 
 async function generateFromCandidate(candidate, chunk, query = {}) {
+  if (candidate.provider === "azure") return generateWithAzure(candidate, chunk);
   if (candidate.provider === "elevenlabs") return generateWithElevenLabs(candidate, chunk);
   if (candidate.provider === "polly") return generateWithPolly(candidate, chunk);
   if (candidate.provider === "google") return generateWithGoogle(candidate, chunk);
@@ -512,7 +505,7 @@ async function generateFromCandidate(candidate, chunk, query = {}) {
 
 async function generateAudio(chunk, query = {}) {
   if (!TTS_CANDIDATES.length) {
-    throw new Error("Nenhum provedor TTS configurado. Configure ELEVENLABS, AWS Polly, Google TTS ou OpenAI.");
+    throw new Error("Nenhum provedor TTS configurado. Configure Azure Speech, AWS Polly, ElevenLabs, Google TTS ou OpenAI.");
   }
 
   const requestedLabel = query.ttsLabel || query.voiceMode || query.tts || "auto";
@@ -549,15 +542,6 @@ app.get("/api/tts/candidates", requireAuth, (_req, res) => {
     auto: { label: "auto", displayName: "Automático: fallback configurado" },
     candidates: TTS_CANDIDATES.map(publicTtsCandidate)
   });
-});
-
-app.get("/api/elevenlabs/diagnose-voices", requireAuth, async (req, res) => {
-  try {
-    const maxVoices = Math.min(Math.max(Number(req.query.max || 25), 1), 60);
-    res.json(await diagnoseElevenLabsVoices({ maxVoices }));
-  } catch (error) {
-    res.status(500).json({ error: error.message || "Erro ao diagnosticar vozes ElevenLabs." });
-  }
 });
 
 app.get("/api/books", requireAuth, async (_req, res) => {

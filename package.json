@@ -1,13 +1,14 @@
 {
-  "name": "gabriel-audio-study-mvp",
+  "name": "coisas-para-fazer-com-a-mh",
+  "version": "1.0.0",
   "private": true,
-  "version": "0.1.0",
-  "description": "PWA privada para transformar PDF/texto em áudio de estudo com OpenAI TTS.",
+  "type": "module",
   "scripts": {
-    "install:all": "npm --prefix server install && npm --prefix client install",
-    "dev:server": "npm --prefix server run dev",
-    "dev:client": "npm --prefix client run dev",
-    "build": "npm --prefix client run build",
-    "start": "npm --prefix server start"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "wrangler": "^4.112.0"
   }
 }

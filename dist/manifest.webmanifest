@@ -1,0 +1,12 @@
+{
+  "name": "Coisas para fazer com a MH",
+  "short_name": "Coisas MH",
+  "description": "Uma lista compartilhada para guardar coisas que queremos fazer juntos.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f7f1ed",
+  "theme_color": "#b12a4a",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
